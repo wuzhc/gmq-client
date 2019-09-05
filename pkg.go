@@ -26,7 +26,7 @@ type Pkg struct {
 }
 
 type Job struct {
-	Id         string `redis:"id"`
+	Id         int64  `redis:"id"`
 	Topic      string `redis:"topic"`
 	Delay      int    `redis:"delay"`
 	TTR        int    `redis:"TTR"` // time-to-run
@@ -36,9 +36,6 @@ type Job struct {
 }
 
 func (j *Job) Validate() error {
-	if len(j.Id) == 0 {
-		return errors.New("job.id is empty")
-	}
 	if len(j.Topic) == 0 {
 		return errors.New("job.topic is empty")
 	}
@@ -63,7 +60,7 @@ func NewPop(topic string) (*Pkg, error) {
 	}, nil
 }
 
-// 心跳包
+// 心跳请求数据包
 func NewPing() *Pkg {
 	return &Pkg{
 		Version: PKG_VERSION,
