@@ -117,6 +117,9 @@ func (p *Producter) Publish(j *Job) error {
 	if atomic.LoadInt32(&p.running) == 0 {
 		return errors.New("Producter is stop")
 	}
+	if p.weight == 0 {
+		return errors.New("Producter.weight is zero")
+	}
 
 	if err := j.Validate(); err != nil {
 		return err

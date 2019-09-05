@@ -169,7 +169,7 @@ func (h *ProducterConnHander) Publish(j *Job) error {
 		return nil
 	case <-h.exitChan:
 		return errors.New("Conn is closed.")
-	case <-time.After(5 * time.Second):
+	case <-time.After(60 * time.Second):
 		return errors.New("Publish timeout.")
 	}
 }
