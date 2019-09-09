@@ -8,21 +8,24 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 type ProducterConnHander struct {
-	Addr          string
-	weight        int
-	producter     *Producter
-	conn          net.Conn
-	wg            WaitGroupWrapper
-	pushChan      chan *Job
-	exitChan      chan struct{}
-	waitDoneQueue []*Job
-	running       int32
+	Addr              string
+	weight            int
+	producter         *Producter
+	conn              net.Conn
+	wg                WaitGroupWrapper
+	pushChan          chan *Job
+	pushSyncChan      chan *JobData
+	exitChan          chan struct{}
+	waitDoneQueue     []*Job
+	waitDoneSyncQueue []*JobData
+	running           int32
 	sync.Once
 	sync.Mutex
 }
@@ -81,6 +84,19 @@ func (h *ProducterConnHander) writeConn() {
 				h.notify([]byte(err.Error()), RESP_ERR)
 				return
 			}
+		case jd := <-h.pushSyncChan:
+			h.pushWaitSyncQueue(jd)
+			pkg, err := NewPush(jd.job)
+			if err != nil {
+				h.popWaitSyncQueue()
+				h.notify([]byte(err.Error()), RESP_ERR)
+				continue
+			}
+			if err := h.Send(pkg); err != nil {
+				h.popWaitSyncQueue()
+				h.notify([]byte(err.Error()), RESP_ERR)
+				return
+			}
 		}
 	}
 }
@@ -109,8 +125,33 @@ func (h *ProducterConnHander) readConn() {
 		b := scanner.Bytes()
 		rtype := int16(binary.BigEndian.Uint16(b[:2]))
 		data := b[4:]
-		h.notify(data, rtype)
+		// fmt.Println(string(data))
+		// h.notify(data, rtype)
+		h.syncNotify(data, rtype)
 	}
+}
+
+func (h *ProducterConnHander) syncNotify(data []byte, rtype int16) {
+	jd := h.popWaitSyncQueue()
+	if jd == nil {
+		log.Fatalln("System failed")
+	}
+
+	var jp *JobResp
+	switch rtype {
+	case RESP_ERR:
+		jp = &JobResp{
+			err: errors.New(string(data)),
+		}
+	case RESP_MSG:
+		jobId, _ := strconv.ParseInt(string(data), 10, 64)
+
+		jp = &JobResp{
+			err:   nil,
+			jobId: jobId,
+		}
+	}
+	jd.doChan <- jp
 }
 
 func (h *ProducterConnHander) notify(data []byte, rtype int16) {
@@ -153,6 +194,26 @@ func (h *ProducterConnHander) popWaitQueue() *Job {
 	return job
 }
 
+func (h *ProducterConnHander) pushWaitSyncQueue(jd *JobData) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.waitDoneSyncQueue = append(h.waitDoneSyncQueue, jd)
+}
+
+func (h *ProducterConnHander) popWaitSyncQueue() *JobData {
+	h.Lock()
+	defer h.Unlock()
+
+	var jd *JobData
+	if len(h.waitDoneSyncQueue) > 0 {
+		jd = h.waitDoneSyncQueue[0]
+		h.waitDoneSyncQueue = h.waitDoneSyncQueue[1:]
+	}
+
+	return jd
+}
+
 func (h *ProducterConnHander) Send(p *Pkg) error {
 	var err error
 	err = binary.Write(h.conn, binary.BigEndian, &p.Version)
@@ -172,4 +233,25 @@ func (h *ProducterConnHander) Publish(j *Job) error {
 	case <-time.After(60 * time.Second):
 		return errors.New("Publish timeout.")
 	}
+}
+
+type JobData struct {
+	job    *Job
+	doChan chan *JobResp
+}
+
+type JobResp struct {
+	err   error
+	jobId int64
+}
+
+func (h *ProducterConnHander) PublishSync(j *Job) (error, int64) {
+	dc := make(chan *JobResp)
+	jd := &JobData{
+		job:    j,
+		doChan: dc,
+	}
+	h.pushSyncChan <- jd
+	t := <-dc
+	return t.err, t.jobId
 }

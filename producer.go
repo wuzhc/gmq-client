@@ -14,6 +14,11 @@ import (
 	"time"
 )
 
+var (
+	ErrProducterRun    = errors.New("Producer is not running.")
+	ErrProducterWeight = errors.New("Producter.weight must be greater than zero")
+)
+
 type Producter struct {
 	weight   int32
 	mux      sync.RWMutex
@@ -42,9 +47,7 @@ func NewProducter(cfg *ProducerCfg) *Producter {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-sigs
-		atomic.AddInt32(&p.running, -1)
-		close(p.exitChan)
-		p.closeAllConnHandler()
+		p.Exit()
 	}()
 
 	p.wg.Wrap(p.timer)
@@ -60,9 +63,13 @@ func (p *Producter) OnError(f RespMsgFunc) {
 	p.event.OnError = f
 }
 
-func (p *Producter) Stop() {
+func (p *Producter) Exit() {
+	atomic.AddInt32(&p.running, -1)
+	close(p.exitChan)
+	p.closeAllConnHandler()
 	p.wg.Wait()
-	log.Println("producer had stop.")
+	log.Println("roducer had exit.")
+	os.Exit(0)
 }
 
 // 关闭所有连接处理器
@@ -113,14 +120,41 @@ func (p *Producter) timer() {
 	}
 }
 
+func (p *Producter) PublishSync(j *Job) (error, int64) {
+	if atomic.LoadInt32(&p.running) == 0 {
+		return ErrProducterRun, 0
+	}
+	if p.weight == 0 {
+		return ErrProducterWeight, 0
+	}
+	if err := j.Validate(); err != nil {
+		return err, 0
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	n := rand.Int31n(p.weight)
+	intn := int(n) + 1
+	w := 0
+
+	for _, hander := range p.handlers {
+		nw := w + hander.weight
+		if intn >= w && intn <= nw {
+			err, jobId := hander.PublishSync(j)
+			return err, jobId
+		}
+		w += nw
+	}
+
+	return errors.New("No producter running"), 0
+}
+
 func (p *Producter) Publish(j *Job) error {
 	if atomic.LoadInt32(&p.running) == 0 {
 		return errors.New("Producter is stop")
 	}
 	if p.weight == 0 {
-		return errors.New("Producter.weight is zero")
+		return errors.New("Producter.weight must be greater than zero")
 	}
-
 	if err := j.Validate(); err != nil {
 		return err
 	}
@@ -182,12 +216,13 @@ func (p *Producter) ConnectToNode(node *Node) error {
 	}
 
 	handler := &ProducterConnHander{
-		Addr:      node.TcpAddr,
-		weight:    node.Weight,
-		producter: p,
-		conn:      conn,
-		pushChan:  make(chan *Job),
-		exitChan:  make(chan struct{}),
+		Addr:         node.TcpAddr,
+		weight:       node.Weight,
+		producter:    p,
+		conn:         conn,
+		pushChan:     make(chan *Job),
+		pushSyncChan: make(chan *JobData),
+		exitChan:     make(chan struct{}),
 	}
 
 	p.handlers[node.TcpAddr] = handler
