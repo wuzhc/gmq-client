@@ -8,7 +8,7 @@ make
 ```
 
 ## 命令
-打开shell,执行一下命令
+打开shell,执行如下命令
 ```bash
 # 单节点操作
 # 推送消息
@@ -34,4 +34,17 @@ gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_rand" -topic="gmq-t
 # 按权重模式选择节点消费消息
 gclient -register_addr="http://127.0.0.1:9595" -cmd="pop_by_weight" -topic="gmq-topic-1"
 ```
-默认会编译后的文件会存放在`$GOPATH/bin`,如果你的`$GOPATH/bin`没有添加环境变量,可以直接用`./build/gclient`代替`gclient`,或者直接运行源码,用`go run main.go`代替`glicent`
+选项说明:  
+- `register_addr` 注册中心http地址
+- `node_addr` 节点tcp地址
+- `cmd` 执行命令类型
+- `topic` 消息所属topic,即消息的分类
+- `pop_num` 此次要消费多少条消息
+- `push_num` 此次要推送多少条消息
+- `msg_Id` 消息ID
+
+注意:  
+默认会把编译后的文件存放在`$GOPATH/bin`,如果你的`$GOPATH/bin`没有添加到环境变量,可以直接用`./build/gclient`代替`gclient`,或者直接运行源码,用`go run main.go`代替`glicent`
+
+## 相关链接
+- [https://github.com/wuzhc/gmq](https://github.com/wuzhc/gmq)
