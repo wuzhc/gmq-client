@@ -16,6 +16,12 @@ import (
 	"time"
 )
 
+const (
+	RESP_MESSAGE = 101
+	RESP_ERROR   = 102
+	RESP_RESULT  = 103
+)
+
 var (
 	ErrTopicEmpty = errors.New("topic is empty")
 )
@@ -72,6 +78,27 @@ func (c *Client) Pop(topic string) error {
 	var params [][]byte
 	params = append(params, []byte("pop"))
 	params = append(params, []byte(topic))
+	line := bytes.Join(params, []byte(" "))
+	if _, err := c.conn.Write(line); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// 死信
+func (c *Client) Dead(topic string, num int) error {
+	if len(topic) == 0 {
+		return ErrTopicEmpty
+	}
+
+	var params [][]byte
+	params = append(params, []byte("dead"))
+	params = append(params, []byte(topic))
+	params = append(params, []byte(strconv.Itoa(num)))
 	line := bytes.Join(params, []byte(" "))
 	if _, err := c.conn.Write(line); err != nil {
 		return err
@@ -157,7 +184,8 @@ func (c *Client) Mpush(topic string, msgs []MMsgPkg) error {
 }
 
 // 确认已消费消息
-func (c *Client) Ack(msgId string, topic string) error {
+// ack <message_id>
+func (c *Client) Ack(topic, msgId string) error {
 	if len(topic) == 0 {
 		return ErrTopicEmpty
 	}
@@ -166,6 +194,28 @@ func (c *Client) Ack(msgId string, topic string) error {
 	params = append(params, []byte("ack"))
 	params = append(params, []byte(msgId))
 	params = append(params, []byte(topic))
+	line := bytes.Join(params, []byte(" "))
+	if _, err := c.conn.Write(line); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// 设置topic配置
+// set <topic> <is_auto_ack>
+func (c *Client) Set(topic string, isAutoAck int) error {
+	if len(topic) == 0 {
+		return ErrTopicEmpty
+	}
+
+	var params [][]byte
+	params = append(params, []byte("set"))
+	params = append(params, []byte(topic))
+	params = append(params, []byte(strconv.Itoa(isAutoAck)))
 	line := bytes.Join(params, []byte(" "))
 	if _, err := c.conn.Write(line); err != nil {
 		return err
@@ -193,8 +243,8 @@ func (c *Client) Recv() (int, []byte) {
 }
 
 // 生产消息
-func Example_Produce(c *Client, topic string) {
-	for i := 0; i < 2; i++ {
+func Example_Produce(c *Client, topic string, num int) {
+	for i := 0; i < num; i++ {
 		// push message
 		msg := MsgPkg{}
 		msg.Body = []byte("golang_" + strconv.Itoa(i))
@@ -218,11 +268,40 @@ func Example_Consume(c *Client, topic string) {
 
 	// receive response
 	rtype, data := c.Recv()
-	if rtype == 0 {
-		log.Println(fmt.Sprintf("recv msg:%v", string(data)))
-	} else {
-		log.Println(string(data))
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+}
+
+// 确认已消费消息
+func Example_Ack(c *Client, topic, msgId string) {
+	if err := c.Ack(topic, msgId); err != nil {
+		log.Println(err)
 	}
+
+	// receive response
+	rtype, data := c.Recv()
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+}
+
+// 设置topic信息,目前只有isAutoAck选项
+func Example_Set(c *Client, topic string, isAutoAck int) {
+	if err := c.Set(topic, isAutoAck); err != nil {
+		log.Println(err)
+	}
+
+	// receive response
+	rtype, data := c.Recv()
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+}
+
+// 死信
+func Example_Dead(c *Client, topic string, num int) {
+	if err := c.Dead(topic, num); err != nil {
+		log.Println(err)
+	}
+
+	// receive response
+	rtype, data := c.Recv()
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
 }
 
 // 轮询模式消费消息
@@ -235,7 +314,7 @@ func Example_Loop_Consume(c *Client, topic string) {
 
 		// receive response
 		rtype, data := c.Recv()
-		if rtype == 0 {
+		if rtype == RESP_MESSAGE {
 			log.Println(fmt.Sprintf("recv msg:%v", string(data)))
 		} else {
 			log.Println(string(data))
@@ -245,8 +324,8 @@ func Example_Loop_Consume(c *Client, topic string) {
 }
 
 // 批量生产消息
-func Example_MProduce(c *Client, topic string) {
-	total := 10
+func Example_MProduce(c *Client, topic string, num int) {
+	total := num
 	var msgs []MMsgPkg
 	for i := 0; i < total; i++ {
 		msgs = append(msgs, MMsgPkg{[]byte("golang_" + strconv.Itoa(i)), 0})
@@ -303,10 +382,10 @@ func InitClients(registerAddr string) ([]*Client, error) {
 }
 
 // 权重模式
-func GetClientByWeightMode() *Client {
+func GetClientByWeightMode(regsiterAddr string) *Client {
 	if len(clients) == 0 {
 		var err error
-		clients, err = InitClients("http://127.0.0.1:9595")
+		clients, err = InitClients(regsiterAddr)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -332,10 +411,10 @@ func GetClientByWeightMode() *Client {
 }
 
 // 随机模式
-func GetClientByRandomMode() *Client {
+func GetClientByRandomMode(regsiterAddr string) *Client {
 	if len(clients) == 0 {
 		var err error
-		clients, err = InitClients("http://127.0.0.1:9595")
+		clients, err = InitClients(regsiterAddr)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -347,10 +426,10 @@ func GetClientByRandomMode() *Client {
 }
 
 // 平均模式
-func GetClientByAvgMode() *Client {
+func GetClientByAvgMode(regsiterAddr string) *Client {
 	if len(clients) == 0 {
 		var err error
-		clients, err = InitClients("http://127.0.0.1:9595")
+		clients, err = InitClients(regsiterAddr)
 		if err != nil {
 			log.Fatalln(err)
 		}
