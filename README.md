@@ -2,7 +2,7 @@
 
 ## 使用
 ```bash
-git clone https://github.com/wuzhc/gmq-client-go.git
+git clone https://github.com/wuzhc/gmq-client-go.git $GOPATH/github.com/wuzhc/gmq-client-go
 cd gmq-client-go
 make
 ```
