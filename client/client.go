@@ -2,18 +2,21 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
-	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/etcd-io/etcd/clientv3"
 )
 
 const (
@@ -27,13 +30,14 @@ var (
 )
 
 type MsgPkg struct {
-	Body  []byte
-	Topic string
-	Delay string
+	Body     string `json:"body"`
+	Topic    string `json:"topic"`
+	Delay    int    `json:"delay"`
+	RouteKey string `json:"route_key"`
 }
 
 type MMsgPkg struct {
-	Body  []byte
+	Body  string
 	Delay int
 }
 
@@ -70,7 +74,8 @@ func (c *Client) GetAddr() string {
 }
 
 // 消费消息
-func (c *Client) Pop(topic string) error {
+// pop <topic_name> <bind_key>
+func (c *Client) Pop(topic, bindKey string) error {
 	if len(topic) == 0 {
 		return ErrTopicEmpty
 	}
@@ -78,6 +83,7 @@ func (c *Client) Pop(topic string) error {
 	var params [][]byte
 	params = append(params, []byte("pop"))
 	params = append(params, []byte(topic))
+	params = append(params, []byte(bindKey))
 	line := bytes.Join(params, []byte(" "))
 	if _, err := c.conn.Write(line); err != nil {
 		return err
@@ -110,7 +116,31 @@ func (c *Client) Dead(topic string, num int) error {
 	return nil
 }
 
+// declare queue
+// queue <topic_name> <bind_key>\n
+func (c *Client) Declare(topic, bindKey string) error {
+	if len(topic) == 0 {
+		return ErrTopicEmpty
+	}
+
+	var params [][]byte
+	params = append(params, []byte("queue"))
+	params = append(params, []byte(topic))
+	params = append(params, []byte(bindKey))
+	line := bytes.Join(params, []byte(" "))
+	if _, err := c.conn.Write(line); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // 生产消息
+// pub <topic_name> <route_key> <delay-time>
+// [ 4-byte size in bytes ][ N-byte binary data ]
 func (c *Client) Push(pkg MsgPkg) error {
 	if len(pkg.Topic) == 0 {
 		return ErrTopicEmpty
@@ -119,7 +149,8 @@ func (c *Client) Push(pkg MsgPkg) error {
 	var params [][]byte
 	params = append(params, []byte("pub"))
 	params = append(params, []byte(pkg.Topic))
-	params = append(params, []byte(pkg.Delay))
+	params = append(params, []byte(pkg.RouteKey))
+	params = append(params, []byte(strconv.Itoa(pkg.Delay)))
 	line := bytes.Join(params, []byte(" "))
 	if _, err := c.conn.Write(line); err != nil {
 		return err
@@ -135,7 +166,7 @@ func (c *Client) Push(pkg MsgPkg) error {
 	if _, err := c.conn.Write(bodylen); err != nil {
 		return err
 	}
-	if _, err := c.conn.Write(body); err != nil {
+	if _, err := c.conn.Write([]byte(body)); err != nil {
 		return err
 	}
 
@@ -143,7 +174,10 @@ func (c *Client) Push(pkg MsgPkg) error {
 }
 
 // 批量生产消息
-func (c *Client) Mpush(topic string, msgs []MMsgPkg) error {
+// mpub <topic_name> <num>
+// <msg.len> <[]byte({"delay":1,"body":"xxx","topic":"xxx","routeKey":"xxx"})>
+// <msg.len> <[]byte({"delay":1,"body":"xxx","topic":"xxx","routeKey":"xxx"})>
+func (c *Client) Mpush(topic string, msgs []MMsgPkg, routeKey string) error {
 	if len(topic) == 0 {
 		return ErrTopicEmpty
 	}
@@ -165,17 +199,24 @@ func (c *Client) Mpush(topic string, msgs []MMsgPkg) error {
 	}
 
 	for i := 0; i < lmsg; i++ {
-		delay := make([]byte, 4)
-		binary.BigEndian.PutUint32(delay, uint32(msgs[i].Delay))
-		bodylen := make([]byte, 4)
-		binary.BigEndian.PutUint32(bodylen, uint32(len(msgs[i].Body)))
-		if _, err := c.conn.Write(delay); err != nil {
-			return err
+		pkg := &MsgPkg{
+			Body:     msgs[i].Body,
+			Delay:    msgs[i].Delay,
+			Topic:    topic,
+			RouteKey: routeKey,
 		}
+		nbyte, err := json.Marshal(pkg)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		bodylen := make([]byte, 4)
+		binary.BigEndian.PutUint32(bodylen, uint32(len(nbyte)))
 		if _, err := c.conn.Write(bodylen); err != nil {
 			return err
 		}
-		if _, err := c.conn.Write(msgs[i].Body); err != nil {
+		if _, err := c.conn.Write(nbyte); err != nil {
 			return err
 		}
 	}
@@ -184,8 +225,8 @@ func (c *Client) Mpush(topic string, msgs []MMsgPkg) error {
 }
 
 // 确认已消费消息
-// ack <message_id>
-func (c *Client) Ack(topic, msgId string) error {
+// ack <message_id> <topic> <bind_key>\n
+func (c *Client) Ack(topic, msgId, bindKey string) error {
 	if len(topic) == 0 {
 		return ErrTopicEmpty
 	}
@@ -194,6 +235,7 @@ func (c *Client) Ack(topic, msgId string) error {
 	params = append(params, []byte("ack"))
 	params = append(params, []byte(msgId))
 	params = append(params, []byte(topic))
+	params = append(params, []byte(bindKey))
 	line := bytes.Join(params, []byte(" "))
 	if _, err := c.conn.Write(line); err != nil {
 		return err
@@ -243,13 +285,14 @@ func (c *Client) Recv() (int, []byte) {
 }
 
 // 生产消息
-func Example_Produce(c *Client, topic string, num int) {
+func Example_Produce(c *Client, topic string, num int, routeKey string) {
 	for i := 0; i < num; i++ {
 		// push message
 		msg := MsgPkg{}
-		msg.Body = []byte("golang_" + strconv.Itoa(i))
+		msg.Body = "golang_" + strconv.Itoa(i)
 		msg.Topic = topic
-		msg.Delay = "0"
+		msg.Delay = 0
+		msg.RouteKey = routeKey
 		if err := c.Push(msg); err != nil {
 			log.Fatalln(err)
 		}
@@ -260,9 +303,20 @@ func Example_Produce(c *Client, topic string, num int) {
 	}
 }
 
+// 声明队列
+func Example_DelcareQueue(c *Client, topic, bindKey string) {
+	if err := c.Declare(topic, bindKey); err != nil {
+		log.Fatalln(err)
+	}
+
+	// receive response
+	rtype, data := c.Recv()
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+}
+
 // 消费消息
-func Example_Consume(c *Client, topic string) {
-	if err := c.Pop(topic); err != nil {
+func Example_Consume(c *Client, topic, bindKey string) {
+	if err := c.Pop(topic, bindKey); err != nil {
 		log.Println(err)
 	}
 
@@ -272,8 +326,8 @@ func Example_Consume(c *Client, topic string) {
 }
 
 // 确认已消费消息
-func Example_Ack(c *Client, topic, msgId string) {
-	if err := c.Ack(topic, msgId); err != nil {
+func Example_Ack(c *Client, topic, msgId, bindKey string) {
+	if err := c.Ack(topic, msgId, bindKey); err != nil {
 		log.Println(err)
 	}
 
@@ -306,10 +360,12 @@ func Example_Dead(c *Client, topic string, num int) {
 
 // 轮询模式消费消息
 // 当server端没有消息后,sleep 3秒后再次请求
-func Example_Loop_Consume(c *Client, topic string) {
+func Example_Loop_Consume(c *Client, topic, bindKey string) {
 	for {
-		if err := c.Pop(topic); err != nil {
-			log.Println(err)
+		if err := c.Pop(topic, bindKey); err != nil {
+			if ok, _ := regexp.MatchString("broken pipe", err.Error()); ok {
+				log.Fatalln(err)
+			}
 		}
 
 		// receive response
@@ -324,13 +380,13 @@ func Example_Loop_Consume(c *Client, topic string) {
 }
 
 // 批量生产消息
-func Example_MProduce(c *Client, topic string, num int) {
+func Example_MProduce(c *Client, topic string, num int, bindKey string) {
 	total := num
 	var msgs []MMsgPkg
 	for i := 0; i < total; i++ {
-		msgs = append(msgs, MMsgPkg{[]byte("golang_" + strconv.Itoa(i)), 0})
+		msgs = append(msgs, MMsgPkg{"golang_" + strconv.Itoa(i), 0})
 	}
-	if err := c.Mpush(topic, msgs); err != nil {
+	if err := c.Mpush(topic, msgs, bindKey); err != nil {
 		log.Fatalln(err)
 	}
 
@@ -342,39 +398,37 @@ func Example_MProduce(c *Client, topic string, num int) {
 var clients []*Client
 
 // 初始化客户端,建立和注册中心节点连接
-func InitClients(registerAddr string) ([]*Client, error) {
-	url := fmt.Sprintf("%s/getNodes", registerAddr)
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	data, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+func InitClients(endpoints string) ([]*Client, error) {
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("endpoints is empty.")
 	}
 
-	type Node struct {
-		Id       int64  `json:"id"`
-		HttpAddr string `json:"http_addr"`
-		TcpAddr  string `json:"tcp_addr"`
-		JoinTime string `json:"join_time"`
-		Weight   int    `json:"weight"`
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   strings.Split(endpoints, ","),
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("can't new etcd client.")
 	}
-	v := struct {
-		Code int `json:"code"`
-		Data struct {
-			Nodes []*Node `json:"nodes"`
-		} `json:"data"`
-		Msg string `json:"msg"`
-	}{}
 
-	if err := json.Unmarshal(data, &v); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	resp, err := cli.Get(ctx, "/gmq/node", clientv3.WithPrefix())
+	cancel()
+	if err != nil {
 		return nil, err
 	}
 
 	var clients []*Client
-	for i := 0; i < len(v.Data.Nodes); i++ {
-		c := NewClient(v.Data.Nodes[i].TcpAddr, v.Data.Nodes[i].Weight)
+	node := make(map[string]string)
+	for _, ev := range resp.Kvs {
+		fmt.Printf("%s => %s\n", ev.Key, ev.Value)
+		if err := json.Unmarshal(ev.Value, &node); err != nil {
+			return nil, err
+		}
+
+		tcpAddr := node["tcp_addr"]
+		weight, _ := strconv.Atoi(node["weight"])
+		c := NewClient(tcpAddr, weight)
 		clients = append(clients, c)
 	}
 
@@ -382,10 +436,10 @@ func InitClients(registerAddr string) ([]*Client, error) {
 }
 
 // 权重模式
-func GetClientByWeightMode(regsiterAddr string) *Client {
+func GetClientByWeightMode(endpoints string) *Client {
 	if len(clients) == 0 {
 		var err error
-		clients, err = InitClients(regsiterAddr)
+		clients, err = InitClients(endpoints)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -411,10 +465,10 @@ func GetClientByWeightMode(regsiterAddr string) *Client {
 }
 
 // 随机模式
-func GetClientByRandomMode(regsiterAddr string) *Client {
+func GetClientByRandomMode(endpoints string) *Client {
 	if len(clients) == 0 {
 		var err error
-		clients, err = InitClients(regsiterAddr)
+		clients, err = InitClients(endpoints)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -426,10 +480,10 @@ func GetClientByRandomMode(regsiterAddr string) *Client {
 }
 
 // 平均模式
-func GetClientByAvgMode(regsiterAddr string) *Client {
+func GetClientByAvgMode(endpoints string) *Client {
 	if len(clients) == 0 {
 		var err error
-		clients, err = InitClients(regsiterAddr)
+		clients, err = InitClients(endpoints)
 		if err != nil {
 			log.Fatalln(err)
 		}
