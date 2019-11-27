@@ -12,27 +12,27 @@ make
 ```bash
 # 单节点操作
 # 推送消息
-gclient -node_addr="127.0.0.1:9503" -cmd="push" -topic="gmq-topic-1" -push_num=1000
+gclient -node_addr="127.0.0.1:9503" -cmd="push" -topic="ketang" -route_key="homework" -push_num=1000 
 # 批量推送消息
-gclient -node_addr="127.0.0.1:9503" -cmd="mpush" -topic="gmq-topic-1" -push_num=1000
+gclient -node_addr="127.0.0.1:9503" -cmd="mpush" -topic="ketang" -route_key="homework" -push_num=1000
 # 消费消息
-gclient -node_addr="127.0.0.1:9503" -cmd="pop" -topic="gmq-topic-1" -pop_num=1000
+gclient -node_addr="127.0.0.1:9503" -cmd="pop" -topic="ketang" -bind_key="homework" -pop_num=1000 
 # 轮询消费消息
-gclient -node_addr="127.0.0.1:9503" -cmd="pop_loop" -topic="gmq-topic-1"
+gclient -node_addr="127.0.0.1:9503" -cmd="pop_loop" -bind_key="homework" -topic="ketang" 
 # 确认已消费
-gclient -node_addr="127.0.0.1:9503" -cmd="ack" -topic="gmq-topic-1" -msg_id="374389276810416130"
+gclient -node_addr="127.0.0.1:9503" -cmd="ack" -topic="ketang" -bind_key="homework" -msg_id="374389276810416130" 
 # 消费死信消息
-gclient -node_addr="127.0.0.1:9503" -cmd="dead" -topic="gmq-topic-1" -pop_num=1000
+gclient -node_addr="127.0.0.1:9503" -cmd="dead" -topic="ketang" -bind_key="homework" -pop_num=1000 
 
 # 多节点操作
 # 按权重模式选择节点推送消息
-gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_weight" -topic="gmq-topic-1" -push_num=1000
+gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_weight" -topic="ketang" -route_key="homework" -push_num=1000
 # 按平均模式选择节点推送消息
-gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_avg" -topic="gmq-topic-1" -push_num=1000
+gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_avg" -topic="ketang" -route_key="homework" -push_num=1000
 # 按随机模式选择节点推送消息
-gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_rand" -topic="gmq-topic-1" -push_num=1000
+gclient -register_addr="http://127.0.0.1:9595" -cmd="push_by_rand" -topic="ketang" -route_key="homework" -push_num=1000
 # 按权重模式选择节点消费消息
-gclient -register_addr="http://127.0.0.1:9595" -cmd="pop_by_weight" -topic="gmq-topic-1"
+gclient -register_addr="http://127.0.0.1:9595" -cmd="pop_by_weight" -topic="ketang" -bind_key="homework"
 ```
 选项说明:  
 - `register_addr` 注册中心http地址
