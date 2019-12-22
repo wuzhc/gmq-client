@@ -5,7 +5,9 @@
 // go run main.go -node_addr="127.0.0.1:9503" -cmd="pop" -topic="ketang" -bind_key="homework" -pop_num=1000
 // go run main.go -node_addr="127.0.0.1:9503" -cmd="pop_loop" -topic="ketang" -bind_key="homework"
 // go run main.go -node_addr="127.0.0.1:9503" -cmd="ack" -topic="ketang" -msg_id="374389276810416130" -bind_key="homework"
-// go run main.go -node_addr="127.0.0.1:9503" -cmd="dead" -topic="ketang" -pop_num=1000 -bind_key="homework"
+// go run main.go -node_addr="127.0.0.1:9503" -cmd="dead" -topic="ketang" -bind_key="homework"
+// go run main.go -node_addr="127.0.0.1:9503" -cmd="subscribe" -channel="ketang"
+// go run main.go -node_addr="127.0.0.1:9503" -cmd="publish" -channel="ketang" -message="xxx"
 
 // 多节点操作
 // go run main.go -etcd_endpoints="http://127.0.0.1:2379" -cmd="push_by_weight" -topic="ketang" -route_key="homework" -push_num=1000
@@ -26,6 +28,8 @@ import (
 var (
 	cmd           string
 	topic         string
+	channel       string
+	message       string
 	nodeAddr      string
 	etcdEndpoints string
 	pushNum       int
@@ -38,6 +42,8 @@ var (
 func main() {
 	flag.StringVar(&cmd, "cmd", "push", "command name")
 	flag.StringVar(&topic, "topic", "golang", "topic name")
+	flag.StringVar(&channel, "channel", "golang", "channel name")
+	flag.StringVar(&message, "message", "golang", "message")
 	flag.StringVar(&nodeAddr, "node_addr", "127.0.0.1:9503", "node address")
 	flag.StringVar(&etcdEndpoints, "etcd_endpoints", "127.0.0.1:2379", "the address of etcd")
 	flag.StringVar(&msgId, "msg_id", "", "the id of message.")
@@ -67,10 +73,16 @@ func main() {
 		gmq.Example_MProduce(client, topic, pushNum, routeKey)
 	case "dead":
 		// 拉取死信消息
-		gmq.Example_Dead(client, topic, popNum)
+		gmq.Example_Dead(client, topic, bindKey)
 	case "ack":
 		// 确认已消费
 		gmq.Example_Ack(client, topic, msgId, bindKey)
+	case "publish":
+		// 发布消息
+		gmq.Example_Publish(client, channel, message)
+	case "subscribe":
+		// 订阅消息
+		gmq.Example_Subscribe(client, channel)
 	case "push_by_weight":
 		// 多节点下,按节点权重推送消息
 		for i := 0; i < pushNum; i++ {

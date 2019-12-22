@@ -26,7 +26,8 @@ const (
 )
 
 var (
-	ErrTopicEmpty = errors.New("topic is empty")
+	ErrTopicEmpty   = errors.New("topic is empty")
+	ErrTopicChannel = errors.New("channel is empty")
 )
 
 type MsgPkg struct {
@@ -95,8 +96,30 @@ func (c *Client) Pop(topic, bindKey string) error {
 	return nil
 }
 
+// 消费消息
+// dead <topic_name> <bind_key>
+func (c *Client) Dead(topic, bindKey string) error {
+	if len(topic) == 0 {
+		return ErrTopicEmpty
+	}
+
+	var params [][]byte
+	params = append(params, []byte("dead"))
+	params = append(params, []byte(topic))
+	params = append(params, []byte(bindKey))
+	line := bytes.Join(params, []byte(" "))
+	if _, err := c.conn.Write(line); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // 死信
-func (c *Client) Dead(topic string, num int) error {
+func (c *Client) Dead_back(topic string, num int) error {
 	if len(topic) == 0 {
 		return ErrTopicEmpty
 	}
@@ -269,6 +292,49 @@ func (c *Client) Set(topic string, isAutoAck int) error {
 	return nil
 }
 
+// 订阅频道
+// subscribe <channel_name> <message>\n
+func (c *Client) Subscribe(channel string) error {
+	if len(channel) == 0 {
+		return ErrTopicChannel
+	}
+
+	var params [][]byte
+	params = append(params, []byte("subscribe"))
+	params = append(params, []byte(channel))
+	line := bytes.Join(params, []byte(" "))
+	if _, err := c.conn.Write(line); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// 发布消息
+// publish <channel_name> <message>\n
+func (c *Client) Publish(channel, message string) error {
+	if len(channel) == 0 {
+		return ErrTopicChannel
+	}
+
+	var params [][]byte
+	params = append(params, []byte("publish"))
+	params = append(params, []byte(channel))
+	params = append(params, []byte(message))
+	line := bytes.Join(params, []byte(" "))
+	if _, err := c.conn.Write(line); err != nil {
+		return err
+	}
+	if _, err := c.conn.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Client) Recv() (int, []byte) {
 	respTypeBuf := make([]byte, 2)
 	io.ReadFull(c.conn, respTypeBuf)
@@ -286,10 +352,29 @@ func (c *Client) Recv() (int, []byte) {
 
 // 生产消息
 func Example_Produce(c *Client, topic string, num int, routeKey string) {
+	type bodyCnt struct {
+		From    string `json:"from"`
+		To      string `json:"to"`
+		Content string `json:"content"`
+	}
+
 	for i := 0; i < num; i++ {
 		// push message
+		vv, _ := json.Marshal(map[string]string{
+			"senderPortrait": "xxxxxxx",
+			"senderId":       "xxxx",
+			"msgContent":     "hello worldhello worldhello worldhello worldhello world",
+		})
+
 		msg := MsgPkg{}
-		msg.Body = "golang_" + strconv.Itoa(i)
+		bc := &bodyCnt{
+			From:    "u10111",
+			To:      "u20222",
+			Content: string(vv),
+		}
+		bbc, _ := json.Marshal(bc)
+		fmt.Println(string(bbc))
+		msg.Body = string(bbc)
 		msg.Topic = topic
 		msg.Delay = 0
 		msg.RouteKey = routeKey
@@ -347,9 +432,19 @@ func Example_Set(c *Client, topic string, isAutoAck int) {
 	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
 }
 
+func Example_Dead(c *Client, topic, bindKey string) {
+	if err := c.Dead(topic, bindKey); err != nil {
+		log.Println(err)
+	}
+
+	// receive response
+	rtype, data := c.Recv()
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+}
+
 // 死信
-func Example_Dead(c *Client, topic string, num int) {
-	if err := c.Dead(topic, num); err != nil {
+func Example_Dead_back(c *Client, topic string, num int) {
+	if err := c.Dead_back(topic, num); err != nil {
 		log.Println(err)
 	}
 
@@ -388,6 +483,39 @@ func Example_MProduce(c *Client, topic string, num int, bindKey string) {
 	}
 	if err := c.Mpush(topic, msgs, bindKey); err != nil {
 		log.Fatalln(err)
+	}
+
+	// receive response
+	rtype, data := c.Recv()
+	log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+}
+
+// 订阅消息
+func Example_Subscribe(c *Client, channel string) {
+	if err := c.Subscribe(channel); err != nil {
+		log.Println(err)
+	}
+
+	// receive response
+	i := 0
+	_ = c.conn.SetReadDeadline(time.Time{})
+	log.Println(c.conn.LocalAddr())
+	for {
+		i++
+		if i > 100 {
+			break
+		}
+
+		// receive response
+		rtype, data := c.Recv()
+		log.Println(fmt.Sprintf("rtype:%v, result:%v", rtype, string(data)))
+	}
+}
+
+// 发布消息
+func Example_Publish(c *Client, channel, message string) {
+	if err := c.Publish(channel, message); err != nil {
+		log.Println(err)
 	}
 
 	// receive response
